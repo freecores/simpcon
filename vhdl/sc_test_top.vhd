@@ -39,7 +39,10 @@ end scio;
 
 architecture rtl of scio is
 
-	constant SLAVE_CNT : integer := 2;
+	constant SLAVE_CNT : integer := 4;
+	-- SLAVE_CNT <= 2**DECODE_BITS
+	constant DECODE_BITS : integer := 2;
+	-- number of bits that can be used inside the slave
 	constant SLAVE_ADDR_BITS : integer := 4;
 
 	type slave_bit is array(0 to SLAVE_CNT-1) of std_logic;
@@ -51,15 +54,27 @@ architecture rtl of scio is
 	type slave_rdy_cnt is array(0 to SLAVE_CNT-1) of unsigned(1 downto 0);
 	signal sc_rdy_cnt		: slave_rdy_cnt;
 
-	signal rd_mux			: std_logic;
+	signal sel, sel_reg		: integer range 0 to 2**DECODE_BITS-1;
 
 begin
 
+	assert SLAVE_CNT <= 2**DECODE_BITS report "Wrong constant in scio";
+
+	sel <= to_integer(unsigned(address(SLAVE_ADDR_BITS+DECODE_BITS-1 downto SLAVE_ADDR_BITS)));
+
+	-- What happens when sel_reg > SLAVE_CNT-1??
+	rd_data <= sc_dout(sel_reg);
+	rdy_cnt <= sc_rdy_cnt(sel_reg);
+
 	--
-	-- Connect two simple test slaves
+	-- Connect SLAVE_CNT simple test slaves
 	--
 	gsl: for i in 0 to SLAVE_CNT-1 generate
-		wbsl: entity work.sc_test_slave
+
+		sc_rd(i) <= rd when i=sel else '0';
+		sc_wr(i) <= wr when i=sel else '0';
+
+		scsl: entity work.sc_test_slave
 			generic map (
 				-- shall we use less address bits inside the slaves?
 				addr_bits => SLAVE_ADDR_BITS
@@ -77,60 +92,19 @@ begin
 		);
 	end generate;
 
-
-
---
---	Address decoding
---
-process(address, rd, wr)
-begin
-
-	-- How can we formulate this more elegant?
-	sc_rd(0) <= '0';
-	sc_wr(0) <= '0';
-	sc_rd(1) <= '0';
-	sc_wr(1) <= '0';
-
-	if address(SLAVE_ADDR_BITS)='0' then
-		sc_rd(0) <= rd;
-		sc_wr(0) <= wr;
-	else
-		sc_rd(1) <= rd;
-		sc_wr(1) <= wr;
-	end if;
-
-end process;
-
---
---	Read mux selector
---
-process(clk, reset)
-begin
-
-	if (reset='1') then
-		rd_mux <= '0';
-	elsif rising_edge(clk) then
-		if rd='1' then
-			rd_mux <= address(SLAVE_ADDR_BITS);
+	--
+	--	Register read mux selector
+	--
+	process(clk, reset)
+	begin
+		if (reset='1') then
+			sel_reg <= 0;
+		elsif rising_edge(clk) then
+			if rd='1' then
+				sel_reg <= sel;
+			end if;
 		end if;
-	end if;
-end process;
+	end process;
 			
---
---	Read data and rdy_cnt mux
---
---		Or should we simple or the rdy_cnt values?
---
-process(rd_mux, sc_dout, sc_rdy_cnt)
-begin
-
-	if rd_mux='0' then
-		rd_data <= sc_dout(0);
-		rdy_cnt <= sc_rdy_cnt(0);
-	else
-		rd_data <= sc_dout(1);
-		rdy_cnt <= sc_rdy_cnt(1);
-	end if;
-end process;
 
 end rtl;
