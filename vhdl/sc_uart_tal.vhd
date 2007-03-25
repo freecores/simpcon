@@ -1,7 +1,9 @@
 --
---	sc_uart.vhd
+--	sc_uart_tal.vhd
 --
 --	8-N-1 serial interface
+--	conf_reg: baud_rate and 2400, HW hs on/off, DTR
+--	default: 101 => baud_rate, no HW hs, DTR on
 --	
 --	wr, rd should be one cycle long => trde, rdrf goes 0 one cycle later
 --
@@ -30,8 +32,10 @@
 --	2003-07-05	new IO standard, change cts/rts to neg logic
 --	2003-09-19	sync ncts in!
 --	2004-03-23	two stop bits
---	2005-11-30	change interface to SimpCon
---	2006-08-07	rxd input register with clk to avoid Quartus tsu violation
+--	2004-04-23	Version for TAL
+--	2004-04-26	DTR is inverted conf_reg(0) => '1' means set DTR!
+--	2005-02-28	Changed default conf_reg to no hand shake (ignore ncts)
+--	2005-12-27	change interface to SimpCon
 --	2006-08-13	use 3 FFs for the rxd input at clk
 --
 
@@ -40,7 +44,7 @@ library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
-entity sc_uart is
+entity sc_uart_tal is
 
 generic (addr_bits : integer;
 	clk_freq : integer;
@@ -62,11 +66,12 @@ port (
 	txd		: out std_logic;
 	rxd		: in std_logic;
 	ncts	: in std_logic;
-	nrts	: out std_logic
+	nrts	: out std_logic;
+	dtr		: out std_logic
 );
-end sc_uart;
+end sc_uart_tal;
 
-architecture rtl of sc_uart is
+architecture rtl of sc_uart_tal is
 
 component fifo is
 
@@ -94,6 +99,8 @@ end component;
 	signal ua_wr, tdre		: std_logic;
 	signal ua_rd, rdrf		: std_logic;
 
+	signal conf_reg			: std_logic_vector(2 downto 0);
+
 	type uart_tx_state_type		is (s0, s1);
 	signal uart_tx_state 		: uart_tx_state_type;
 
@@ -104,6 +111,7 @@ end component;
 	signal tf_half		: std_logic;
 
 	signal ncts_buf		: std_logic_vector(2 downto 0);	-- sync in
+	signal ncts_in		: std_logic;
 
 	signal tsr			: std_logic_vector(9 downto 0); -- tx shift register
 
@@ -127,7 +135,10 @@ end component;
 	signal rx_clk		: std_logic;
 	signal rx_clk_ena	: std_logic;
 
-	constant clk16_cnt	: integer := (clk_freq/baud_rate+8)/16-1;
+	constant clk16_fast_cnt	: integer := (clk_freq/baud_rate+8)/16-1;
+	constant clk16_slow_cnt	: integer := (clk_freq/2400+8)/16-1;
+
+	signal clk16_cnt	: integer range 0 to clk16_slow_cnt;
 
 
 begin
@@ -163,11 +174,36 @@ end process;
 	ua_wr <= wr and address(0);
 
 --
+--	SimpCon write is very simple
+--
+process(clk, reset)
+
+begin
+
+	if (reset='1') then
+		conf_reg <= "101";
+	elsif rising_edge(clk) then
+		-- config register is at offset 0
+		if wr='1' and address(0)='0' then
+			conf_reg <= wr_data(2 downto 0);
+		end if;
+
+		if conf_reg(2)='1' then
+			clk16_cnt <= clk16_fast_cnt;
+		else
+			clk16_cnt <= clk16_slow_cnt;
+		end if;
+	end if;
+end process;
+
+	dtr <= not conf_reg(0);
+
+--
 --	serial clock
 --
 process(clk, reset)
 
-	variable clk16		: integer range 0 to clk16_cnt;
+	variable clk16		: integer range 0 to clk16_slow_cnt;
 	variable clktx		: unsigned(3 downto 0);
 	variable clkrx		: unsigned(3 downto 0);
 
@@ -246,17 +282,23 @@ begin
 		tsr <= "1111111111";
 		tf_rd <= '0';
 		ncts_buf <= "111";
+		ncts_in <= '1';
 
 	elsif rising_edge(clk) then
 
 		ncts_buf(0) <= ncts;
 		ncts_buf(2 downto 1) <= ncts_buf(1 downto 0);
+		if conf_reg(1)='1' then
+			ncts_in <= ncts_buf(2);
+		else
+			ncts_in <= '0';
+		end if;
 
 		case uart_tx_state is
 
 			when s0 =>
 				i := 0;
-				if (tf_empty='0' and ncts_buf(2)='0') then
+				if (tf_empty='0' and ncts_in='0') then
 					uart_tx_state <= s1;
 					tsr <= tf_dout & '0' & '1';
 					tf_rd <= '1';

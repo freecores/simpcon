@@ -443,12 +443,13 @@ to clarify:
     \item Use address phase or better command cycle?
 \end{itemize}
 
-\end{document}
+%\end{document}
 
 
 \section{Notes}
 
 \subsection{Group comment}
+\begin{verbatim}
 
 After implementing the Wishbone interface for main memory access
 from JOP I see several issues with the Wishbone specification that
@@ -522,8 +523,10 @@ devices the former arguments do not apply to that extent as the
 pressure for low latency access and pipelining is not high.
 Therefore, a bridge to WB IO devices can be a practical solution for
 design reuse.
+\end{verbatim}
 
 \subsubsection{additional comments}
+\begin{verbatim}
 
 The idea for (some) pipeline support is twofold:
 
@@ -551,3 +554,322 @@ takes some time to draw all diagrams for a document.
 
 I have a first implementation of SimpCon on JOP to test the ideas: A
 master in JOP and a slave for SRAM access.
+\end{verbatim}
+
+\subsection{e-mail from Robert Finch}
+
+\begin{verbatim}
+
+
+Hi Martin, I read your comments. I've thought some about the
+WISHBONE spec myself.
+
+
+"Martin Schoeberl" <mschoebe@mail.tuwien.ac.at> wrote in message
+news:<4384f0b3$0$11610$3b214f66@tunews.univie.ac.at>...
+> After implementing the Wishbone interface for main memory access
+> from JOP I see several issues with the Wishbone specification that
+> makes it not the best choice for SoC interconnect.
+
+> The master is requested to hold the address and data valid through
+> the whole read or write cycle. This complicates the connection to a
+> master that has the data valid only for one cycle. In this case the
+> address and data have to be registered *before* the Wishbone connect
+> or an expensive (time and resources) MUX has to be used. A register
+> results in one additional cycle latency. A better approach would be
+> to register the address and data in the slave. Than there is also
+> time to perform address decoding in the slave (before the address
+> register).
+
+I've of the opinion that all outputs of masters should be
+registered. Registering the outputs hides the timing of the master's
+internal signals from the rest of the system and helps turn it into
+a 'black box'. However, in my designs I provide both registered and
+unregistered versions of outputs, as it is quite handy to have
+unregistered signals sometimes. It would have been nice if the
+WISHBONE bus spec'd unregistered signals as well as registered ones.
+I've just been naming the unregistered signals by including '_nxt'
+in the signal name as in 'adr_nxt_o'. '_nxt' standing for the signal
+value that will be 'next'.
+
+Why is the MUX needed ?
+
+I've found that a register may indeed result in an additional cycle
+of latency, depending on the how the system is put together.
+However, I've also found that it doesn't really make any difference
+to the performance of the system. Registering the output often
+allows the cycle time to be decreased, and the 'lost' cycle of
+latency is made up for by better timing. I've also found that the
+INTERCON (address decoding, bus muxing logic, and arbitration)
+typically requires a full cycle by itself and it's best to have the
+signals feeding into the INTERCON already registered. Unless the
+system is really small (single master / slave).
+
+By 'address decoding in slaves' I'm assuming you mean partial
+address decoding for only register selection. Full address decoding
+shouldn't be done in slaves as it wastes a lot of resources. The
+address decoding (device/slave selection) should be done by the
+INTERCON, and is a function of the system.
+
+Almost always masters are designed to hold address and data valid
+until the external system acknowledges the request.
+
+>
+> There is a similar issue for the output data from the slave: As it
+> is only valid for a single cycle it has to be registered by the
+> master when the processor is not reading it immediately. Therefore,
+> the slave should keep the last valid data at it's output even when
+> wb.stb is not assigned anymore (which is no issue from the hardware
+> complexity).
+
+I'm not sure I understand the 'single cycle' timing. Slave devices
+I've worked on present valid data as long as the signals coming from
+the INTERCON indicate that it should do so. Otherwise the output
+data from the slave is allowed to flip around according to whatever
+register is addressed as it doesn't affect the system since it's not
+muxed to the master's inputs unless it's the addressed device.
+
+Generally, during a read request the master will always be ready to
+read data immediately. If it wasn't ready to read the data it
+shouldn't have requested it, as this wastes bus bandwidth.
+
+>
+> The Wishbone connection for JOP resulted in an unregistered Wishbone
+> memory interface and registers for the address and data in the
+> Wishbone master. However, for fast address and control output (tco)
+> and short setup time (tsu) we want the registers in the IO-pads of
+> the FPGA. With the registers buried in the WB master it takes some
+> effort to set the right constraints for the Synthesizer to implement
+> such IO-registers.
+>
+> The same issue is true for the control signals. The translation from
+> the wb.cyc, wb.stb and wb.we signals to ncs, noe and nwe for the
+> SRAM are on the critical path.
+
+I've come to the conclusion that it's unrealistic to expect that
+external memory can be accessed at a high rate using only a single
+clock cycle. There is naturally a multi-cycle latency when dealing
+with an external device operating a high clock rate. The registered
+outputs of a WISHBONE master typically wouldn't need to be
+registered at the IO-pads.
+
+> The ack signal is too late for a pipelined master. We would need to
+> know it *earlier* when the next data will be available --- and this
+> is possible, as we know in the slave when the data from the SRAM
+> will arrive. A work around solution is a non-WB-conforming early ack
+> signal.
+
+I ran into this too. I built a system similar to this and it worked
+okay. But, I decided not to build newer systems this way. A problem
+is that the latency of external device may vary. This makes it
+difficult to pipeline the master. SRAM may have a latency of three
+cycles, BRAM two cycles, and IO-devices a single cycle. My (current)
+master already has an internal three stage pipeline, adding three
+more pipeline stages for memory would turn it into a six stage
+monster.
+
+>
+> Due to the fact that the data registers not inside the WB interface
+> we need an extra WB interface for the Flash/NAND interface (on the
+> Cyclone board). We cannot afford the address decoding and a MUX in
+> the data read path without registers. This would result in an extra
+> cycle for the memory read due to the combinational delay.
+>
+Yes.  Can the delay be hidden using mult-masters (later) ?
+
+> In the WB specification (AFAIK) there is no way to perform pipelined
+> read or write.
+
+This is something I've thought was missing from the spec as well.
+However, doing pipelined access across a system bus could be quite a
+feat.
+
+
+However, for blocked memory transfers (e.g. cache
+> load) this is the usual way to get a good performance.
+>
+> Conclusion -- I would prefer:
+>
+>     * Address and data (in/out) register in the slave
+>     * A way to know earlier when data will be available (or
+>       a write has finished)
+>     * Pipelining in the slave
+>
+> As a result from this experience I'm working on a new SoC
+> interconnect (working name SimpCon) definition that should avoid the
+> mentioned issues and should be still easy to implement the master
+> and slave.
+>
+> As there are so many projects available that implement the WB
+> interface I will provide bridges between SimpCon and WB. For IO
+> devices the former arguments do not apply to that extent as the
+> pressure for low latency access and pipelining is not high.
+> Therefore, a bridge to WB IO devices can be a practical solution for
+> design reuse.
+>
+> A question to the group: What SoC interconnect are you using?
+> A standard one for the peripheral devices and a 'home-brewed' for
+> more demanding connections (e.g. external RAM access)?
+>
+> Martin
+>
+
+I'm using an 'enhanced' WISHBONE bus (I added one or two signals,
+and renamed a couple).
+
+I found that for my systems it wasn't necessary to pipeline the
+memory system to get good performance. The reason being that there
+are multiple bus masters, and all the memory bandwidth is consumed
+anyway. (CPU, VIDEO, AUDIO, SPRITE, DISK, CPU2). I ended up building
+a shared memory controller with an arbitrater that allows each
+device access only every third cycle. This effectively hides a three
+cycle latency though the memory. The external memory can service a
+request every single clock cycle (at 40MHz!). (Just not from the
+same master) Every cycle one of the masters is selected to be
+allowed a memory access. Three cycles later, read data is available
+for that master. From the master's perspective it looks like a
+normal WISHBONE bus.
+
+Even though the system isn't pipelined, it's using the maximum
+amount of performance it can get out of the memory. As a result,
+it's turned out that the WISHBONE bus serves as a suitable bus
+system to use.
+
+I'm not sure what's included in JOP system (I'm a news-subscriber),
+but it may be easier to get better performance by using multiple
+CPU's. For example, one cpu could be handling network communcations
+while a second is running Java code (JVM). If there is any kind of
+VIDEO or audio (eg MP3) that could be handled by another master as
+well.
+
+
+Good Luck with you're bus design.
+
+Robert
+
+\end{verbatim}
+
+\subsection{comp.arch.fpga}
+
+\begin{verbatim}
+>> The last days I played around with the Quartus SOPC builder [1].
+>> Although I'm more a batch/make guy, I'm impressed by the easy to use
+>> tool. In order to scratch a little bit on the dominance of the NIOS II
+>> in the SOPC world I wrapped JOP [2] into an Avalon component ;-)
+>
+> Kudos, that is excellent. Any lessons/gotchas about turning JOP into an
+> SOPC components should someone else fancy a similar undertaking?
+
+The Avalon bus is very flexible. Therefore, writing a slave or
+master (SOPC component) is not that hard. The magic is in the Avalon
+switch fabric generated by the builder. However, an example would
+have helped (Altera listening?). I didn't find anything on Altera's
+website or with Google. Now a very simple slave can be found at [1].
+
+One thing to take care: When you (like me) like to avoid VHDL files
+in the Quartus directory you can easily end up with three copies of
+your design files. Can get confusing which one to edit. When you
+edit your VHDL file in the component directory (the source for the
+SOPC builder) don't forget to rebuild your system. The build process
+copies it to your Quartus project directory.
+
+When you want to start over with a clean project the only files
+needed for the project are: .qpf, .qsf, .ptf
+
+The master is also ease: just address, read and write data,
+read/write and you have to react to waitrequest. See as example the
+SimpCon/Avalon bridge at [2]. The Avalon interconnect fabric handles
+all bus multiplexing, bus resizing, and control signal translation.
+
+>> However, of course there is some drawback. The performance of the
+>> Avalon system is lower than a 'native' connection (or in my case
+>> via SimpCon [5]) of the main memory to the CPU. I can provide some
+>> numbers if there is interest...
+>
+> Care to elaborate? I'd expect going over Avalon could add latency, but
+> if you can exploit multiple outstanding transactions (aka "posted
+> reads") and/or bust transfers, the bandwidth should be the same as
+> "native".
+
+Yes, the latency is the issue for JOP. JOP does not trigger several
+read or write transactions. However, it can trigger one transaction
+and than continue to execute microcode. When the (read) result is
+needed, the JOP pipeline is stopped till the result is available.
+What helps is to know in advance (one or two cycles) when the result
+will be available. That's the trick with the SimpCon interface.
+There is not a single ack or waitrequest signal, but a counter that
+will say how many cycles it will take to provide the result. In this
+case I can restart the pipeline earlier.
+
+Another point is, in my opinion, the wrong role who has to hold data
+for more than one cycle. This is true for several busses (e.g. also
+Wishbone). For these busses the master has to hold address and write
+data till the slave is ready. This is a result from the backplane
+bus thinking. In an SoC the slave can easily register those signals
+when needed longer and the master can continue. On the other hand,
+as JOP continues to execute and it is not so clear when the result
+is read, the slave should hold the data when available. That is easy
+to implement, but Wishbone and Avalon specify just a single cycle
+data valid.
+
+>> BTW: The Cyclone II FPGA cannot be clocked really faster than the
+>> Cyclone (just a few %). I hoped to get some speed-up for free due
+>> to a new generation FPGA :-(
+>
+> I was surprised too when I saw that. I gather the only way the Cyclone
+> II can gain you speed over Cyclone I is when you can use the embedded
+> multipliers. Makes me wonder about the upcoming Cyclone III.
+
+Are there any other data available on that. I did not find many
+comments in this group on experiences with Cyclone I and II. Looks
+like the CII was more optimized for cost than speed. Yes, waiting
+for III ;-)
+
+Martin
+
+[1]
+http://www.opencores.org/cvsweb.cgi/~checkout~/jop/sopc/components/avalon_test_slave/hdl/avalon_test_slave.vhd
+
+[2]
+http://www.opencores.org/cvsweb.cgi/~checkout~/jop/vhdl/scio/sc2avalon.vhd
+
+Hi Antti,
+
+> most of the SOPC magin happens in the perl package "Europe" ASFAIK.
+> dont expect a lot of information about the internals of the package.
+
+That's fine for me. When the connection magic happens and I don't
+have to care it's fine. OK, one exception: Perhaps I would like to
+know more details on the latency. The switch fabric is 'plain' VHdL
+or Verilog. However, generated code is very hard to read.
+
+> as very simple example for avalon master-slave type of peripherals there
+> is on free avalon IP core for SD-card support the core can be found
+> at some russian forum and later it was also added to the user ip
+> section of the microtronix forums.
+
+Any link handy for this example?
+
+> the avalon master is really as simple as the slave.
+
+Almost, you have to hold address, data and read/write active as long
+as waitrequest is pending. I don't like this, see above.
+
+In my case e.g. the address from JOP (= top of stack) is valid only
+for a single cycle. To avoid one more cycle latency I present in the
+first cycle the TOS and register it. For additional wait cycles a
+MUX switches from TOS to the address register. I know this is a
+slight violation of the Avalon specification. There can be some
+glitches on the MUX switch. For synchronous on-chip peripherals this
+is absolute not issue. However, this signals are also used for
+off-chip asynchronous peripherals (SRAM). However, I assume that
+this possible switching glitches are not really seen on the output
+pins (or at the SRAM input).
+
+Martin
+
+
+\end{verbatim}
+
+
+\end{document}
