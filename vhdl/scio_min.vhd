@@ -37,7 +37,7 @@ use work.sc_pack.all;
 use work.jop_config.all;
 
 entity scio is
-
+generic (cpu_id : integer := 0);
 port (
 	clk		: in std_logic;
 	reset	: in std_logic;
@@ -54,6 +54,11 @@ port (
 	irq_in			: out irq_in_type;
 	exc_req			: in exception_type;
 
+-- CMP
+
+	sync_out : in sync_out_type := NO_SYNC;
+	sync_in	 : out sync_in_type;
+	
 -- serial interface
 
 	txd			: out std_logic;
@@ -76,7 +81,7 @@ end scio;
 
 architecture rtl of scio is
 
-	constant SLAVE_CNT : integer := 2;
+	constant SLAVE_CNT : integer := 3;
 	-- SLAVE_CNT <= 2**DECODE_BITS
 	-- take care of USB address 0x20!
 	constant DECODE_BITS : integer := 2;
@@ -112,6 +117,10 @@ begin
 	sc_io_in.rd_data <= sc_dout(sel_reg);
 	sc_io_in.rdy_cnt <= sc_rdy_cnt(sel_reg);
 
+	-- default for unused USB device
+	sc_dout(2) <= (others => '0');
+	sc_rdy_cnt(2) <= (others => '0');
+
 	--
 	-- Connect SLAVE_CNT simple test slaves
 	--
@@ -136,9 +145,10 @@ begin
 		end if;
 	end process;
 			
-	cmp_cnt: entity work.sc_cnt generic map (
+	cmp_sys: entity work.sc_sys generic map (
 			addr_bits => SLAVE_ADDR_BITS,
-			clk_freq => clk_freq
+			clk_freq => clk_freq,
+			cpu_id => cpu_id
 		)
 		port map(
 			clk => clk,
@@ -153,6 +163,9 @@ begin
 
 			irq_in => irq_in,
 			exc_req => exc_req,
+			
+			sync_out => sync_out,
+			sync_in => sync_in,
 			
 			wd => wd
 		);
